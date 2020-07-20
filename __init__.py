@@ -38,6 +38,7 @@ CONF_ENTITY_NAME = "name"
 CONF_EXPOSE_BY_DEFAULT = "expose_by_default"
 CONF_EXPOSED_DOMAINS = "exposed_domains"
 CONF_HOST_IP = "host_ip"
+CONF_LIGHTS_ALL_DIMMABLE = "lights_all_dimmable"
 CONF_LISTEN_PORT = "listen_port"
 CONF_OFF_MAPS_TO_ON_DOMAINS = "off_maps_to_on_domains"
 CONF_TYPE = "type"
@@ -46,6 +47,7 @@ CONF_UPNP_BIND_MULTICAST = "upnp_bind_multicast"
 TYPE_ALEXA = "alexa"
 TYPE_GOOGLE = "google_home"
 
+DEFAULT_LIGHTS_ALL_DIMMABLE = False
 DEFAULT_LISTEN_PORT = 8300
 DEFAULT_UPNP_BIND_MULTICAST = True
 DEFAULT_OFF_MAPS_TO_ON_DOMAINS = ["script", "scene"]
@@ -85,6 +87,7 @@ CONFIG_SCHEMA = vol.Schema(
                 vol.Optional(CONF_ENTITIES): vol.Schema(
                     {cv.entity_id: CONFIG_ENTITY_SCHEMA}
                 ),
+                vol.Optional(CONF_LIGHTS_ALL_DIMMABLE): cv.boolean,
             }
         )
     },
@@ -174,6 +177,7 @@ class Config:
         self.type = conf.get(CONF_TYPE)
         self.numbers = None
         self.cached_states = {}
+        self._exposed_cache = {}
 
         if self.type == TYPE_ALEXA:
             _LOGGER.warning(
@@ -236,6 +240,12 @@ class Config:
             if hidden_value is not None:
                 self._entities_with_hidden_attr_in_config[entity_id] = hidden_value
 
+        # Get whether all non-dimmable lights should be reported as dimmable
+        # for compatibility with some Alexa devices.
+        self.lights_all_dimmable = conf.get(
+            CONF_LIGHTS_ALL_DIMMABLE, DEFAULT_LIGHTS_ALL_DIMMABLE
+        )
+
     def entity_id_to_number(self, entity_id):
         """Get a unique number for the entity id."""
         if self.type == TYPE_ALEXA:
@@ -279,6 +289,24 @@ class Config:
         return entity.attributes.get(ATTR_EMULATED_HUE_NAME, entity.name)
 
     def is_entity_exposed(self, entity):
+        """Cache determine if an entity should be exposed on the emulated bridge."""
+        entity_id = entity.entity_id
+        if entity_id not in self._exposed_cache:
+            self._exposed_cache[entity_id] = self._is_entity_exposed(entity)
+        return self._exposed_cache[entity_id]
+
+    def filter_exposed_entities(self, states):
+        """Filter a list of all states down to exposed entities."""
+        exposed = []
+        for entity in states:
+            entity_id = entity.entity_id
+            if entity_id not in self._exposed_cache:
+                self._exposed_cache[entity_id] = self._is_entity_exposed(entity)
+            if self._exposed_cache[entity_id]:
+                exposed.append(entity)
+        return exposed
+
+    def _is_entity_exposed(self, entity):
         """Determine if an entity should be exposed on the emulated bridge.
 
         Async friendly.
